@@ -5,11 +5,22 @@ from typing import Any, Dict, List, Optional
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 
-app = FastAPI(title="Feruza Abduqosimova Telegram Bot", version="2.4.0")
+app = FastAPI(title="Feruza Abduqosimova Telegram Bot", version="2.5.0")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_ID_RAW = os.getenv("ADMIN_ID", "").strip()
-ADMIN_ID = int(ADMIN_ID_RAW) if ADMIN_ID_RAW.lstrip("-").isdigit() else 0
+
+def parse_admin_ids(raw: str) -> set[int]:
+    """ADMIN_ID bir yoki bir nechta ID qabul qiladi: 111,222 yoki 111 222."""
+    cleaned = raw.replace(";", ",").replace(" ", ",")
+    result: set[int] = set()
+    for part in cleaned.split(","):
+        value = part.strip()
+        if value and value.lstrip("-").isdigit():
+            result.add(int(value))
+    return result
+
+ADMIN_IDS = parse_admin_ids(ADMIN_ID_RAW)
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
 SUPABASE_KEY = os.getenv("SUPABASE_KEY", "").strip()
 SETUP_SECRET = os.getenv("SETUP_SECRET", "").strip()
@@ -241,7 +252,7 @@ def effective_chat(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
 
 def is_main_admin(update: Dict[str, Any]) -> bool:
     user = effective_user(update)
-    return bool(user and ADMIN_ID and user.get("id") == ADMIN_ID)
+    return bool(user and user.get("id") in ADMIN_IDS)
 
 
 async def send_message(chat_id: int, text: str, reply_markup: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -449,10 +460,12 @@ async def handle_my_chat_member(update: Dict[str, Any]) -> None:
         return
     if new_member.get("status") not in ("administrator", "creator"):
         return
-    if not ADMIN_ID or actor.get("id") != ADMIN_ID:
+    actor_id = actor.get("id")
+    if actor_id not in ADMIN_IDS:
         return
 
-    user_id = ADMIN_ID
+    # Kanal qo‘shishni qaysi admin boshlagan bo‘lsa, aynan uning sessiyasi davom etadi.
+    user_id = int(actor_id)
     session = await get_session(user_id)
     if session.get("mode") != "channel_wait_admin":
         return
@@ -736,7 +749,7 @@ async def root():
     return {
         "ok": True,
         "service": "feruza-abduqosimova-bot",
-        "version": "2.4.0",
+        "version": "2.5.0",
         "mode": "telegram-webhook",
         "database": "supabase",
     }
@@ -748,7 +761,7 @@ async def health():
         name
         for name, value in {
             "BOT_TOKEN": BOT_TOKEN,
-            "ADMIN_ID": ADMIN_ID,
+            "ADMIN_ID": ADMIN_IDS,
             "SUPABASE_URL": SUPABASE_URL,
             "SUPABASE_KEY": SUPABASE_KEY,
             "SETUP_SECRET": SETUP_SECRET,

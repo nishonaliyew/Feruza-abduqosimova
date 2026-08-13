@@ -121,3 +121,14 @@ https://PROJECT.vercel.app/health
 - Panel tugmalari bosilganda aynan shu yangi panel edit qilinadi.
 - Private kanalni admin orqali avtomatik aniqlash saqlangan.
 - `Ro‘yxat` tugmasi olib tashlangan holatda qoladi.
+
+
+## Bir nechta administrator
+
+`ADMIN_ID` endi bir nechta Telegram user ID ni vergul bilan qabul qiladi. Masalan:
+
+```env
+ADMIN_ID=6570315540,8831478927
+```
+
+Bo‘sh joy bilan yozish ham ishlaydi, lekin vergul tavsiya qilinadi. Har ikkala ID botning boshqaruv panelidan foydalana oladi. Yopiq kanal qo‘shilganda kanalni qaysi admin qo‘shgan bo‘lsa, jarayon aynan o‘sha admin sessiyasida davom etadi.
