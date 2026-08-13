@@ -113,3 +113,11 @@ https://PROJECT.vercel.app/health
 - Private chatda admin yozgan oddiy xabarlar o‘chirilmaydi.
 - Faqat botning o‘zi yuborgan vaqtinchalik inline tanlash xabari kerak bo‘lsa o‘chirilishi mumkin.
 
+
+
+## v2.4 yangilanish
+- `/start` yozilganda foydalanuvchi xabari o‘chirilmaydi.
+- Har `/start` uchun boshqaruv paneli chatning eng pastiga yangi xabar sifatida yuboriladi.
+- Panel tugmalari bosilganda aynan shu yangi panel edit qilinadi.
+- Private kanalni admin orqali avtomatik aniqlash saqlangan.
+- `Ro‘yxat` tugmasi olib tashlangan holatda qoladi.

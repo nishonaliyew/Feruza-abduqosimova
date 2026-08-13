@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 
-app = FastAPI(title="Feruza Abduqosimova Telegram Bot", version="2.3.0")
+app = FastAPI(title="Feruza Abduqosimova Telegram Bot", version="2.4.0")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_ID_RAW = os.getenv("ADMIN_ID", "").strip()
@@ -356,8 +356,11 @@ async def handle_start(update: Dict[str, Any]) -> None:
         await send_message(chat["id"], "🔒 Bu bot faqat administrator tomonidan boshqariladi.")
         return
 
-    # /start komandasi foydalanuvchi xabari — o‘chirilmaydi.
-    panel_id = await show_or_replace_panel(user_id, chat["id"], PANEL_TEXT, main_menu())
+    # /start foydalanuvchi xabari — o‘chirilmaydi.
+    # Har /start bosilganda panelni chatning eng pastiga YANGI xabar qilib yuboramiz.
+    # Eski panelni edit qilish foydalanuvchiga "bot javob bermadi"dek ko‘rinishi mumkin edi.
+    sent = await send_message(chat["id"], PANEL_TEXT, main_menu())
+    panel_id = int(sent["message_id"])
     await reset_session(user_id, ui_chat_id=chat["id"], ui_message_id=panel_id)
 
 
@@ -733,7 +736,7 @@ async def root():
     return {
         "ok": True,
         "service": "feruza-abduqosimova-bot",
-        "version": "2.3.0",
+        "version": "2.4.0",
         "mode": "telegram-webhook",
         "database": "supabase",
     }
