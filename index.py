@@ -1,11 +1,12 @@
 import asyncio
 import os
+import re
 from typing import Any, Dict, List, Optional
 
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 
-app = FastAPI(title="Feruza Abduqosimova Telegram Bot", version="2.5.0")
+app = FastAPI(title="Feruza Abduqosimova Telegram Bot", version="2.6.0")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_ID_RAW = os.getenv("ADMIN_ID", "").strip()
@@ -28,6 +29,7 @@ WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
 
 TG_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}"
 _http: Optional[httpx.AsyncClient] = None
+_bot_id: Optional[int] = None
 
 SECTION_NAMES = {
     "admin": "👨‍💼 Admin",
@@ -184,14 +186,22 @@ async def reset_session(
     *,
     ui_chat_id: Optional[int] = None,
     ui_message_id: Optional[int] = None,
+    clear_channel: bool = False,
 ) -> None:
+    """Sessiya rejimini tozalaydi, lekin oxirgi admin qilingan kanalni eslab qoladi.
+
+    Bu private t.me/+... linklar uchun kerak: Bot API private invite linkni
+    bevosita chat_id ga aylantirmaydi, shuning uchun my_chat_member orqali olingan
+    oxirgi kanal ID sini saqlab turamiz.
+    """
     row: Dict[str, Any] = {
         "user_id": user_id,
         "mode": None,
         "target": None,
-        "channel_id": None,
-        "channel_title": None,
     }
+    if clear_channel:
+        row["channel_id"] = None
+        row["channel_title"] = None
     if ui_chat_id is not None:
         row["ui_chat_id"] = ui_chat_id
     if ui_message_id is not None:
@@ -354,6 +364,237 @@ async def is_group_admin(update: Dict[str, Any]) -> bool:
         return False
 
 
+async def get_bot_id() -> int:
+    global _bot_id
+    if _bot_id is None:
+        me = await tg("getMe")
+        _bot_id = int(me["id"])
+    return _bot_id
+
+
+async def bot_is_channel_admin(chat_id: int) -> bool:
+    try:
+        member = await tg("getChatMember", {
+            "chat_id": chat_id,
+            "user_id": await get_bot_id(),
+        })
+        return member.get("status") in ("administrator", "creator")
+    except Exception:
+        return False
+
+
+def parse_channel_link(text: str) -> Optional[Dict[str, str]]:
+    """Public @username va private t.me/+hash / joinchat linklarini taniydi."""
+    value = (text or "").strip()
+    if not value:
+        return None
+
+    if re.fullmatch(r"@[A-Za-z0-9_]{5,32}", value):
+        username = value[1:]
+        return {"kind": "public", "username": username, "display": f"https://t.me/{username}"}
+
+    # Protokolsiz t.me/... ham qabul qilinsin.
+    normalized = value
+    if normalized.lower().startswith(("t.me/", "telegram.me/", "www.t.me/", "www.telegram.me/")):
+        normalized = "https://" + normalized
+
+    private_match = re.fullmatch(
+        r"https?://(?:www\.)?(?:t|telegram)\.me/(?:\+|joinchat/)([A-Za-z0-9_-]+)(?:[/?#].*)?",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if private_match:
+        invite_hash = private_match.group(1)
+        return {
+            "kind": "private",
+            "hash": invite_hash,
+            "display": f"https://t.me/+{invite_hash}",
+        }
+
+    public_match = re.fullmatch(
+        r"https?://(?:www\.)?(?:t|telegram)\.me/([A-Za-z0-9_]{5,32})(?:[/?#].*)?",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    if public_match:
+        username = public_match.group(1)
+        # Telegramning xizmat yo'llarini kanal username deb qabul qilmaymiz.
+        if username.lower() in {"joinchat", "share", "addstickers", "proxy", "socks", "login"}:
+            return None
+        return {"kind": "public", "username": username, "display": f"https://t.me/{username}"}
+
+    return None
+
+
+def private_invite_hash(link: Optional[str]) -> Optional[str]:
+    parsed = parse_channel_link(link or "")
+    if parsed and parsed.get("kind") == "private":
+        return parsed.get("hash")
+    return None
+
+
+def channel_section_keyboard() -> Dict[str, Any]:
+    return inline_keyboard([
+        [{"text": "👨‍💼 Admin", "callback_data": "channel_admin"}],
+        [{"text": "🧑‍💼 Manager", "callback_data": "channel_manager"}],
+        [{"text": "👔 Rahbar", "callback_data": "channel_rahbar"}],
+        [{"text": "⬅️ Bosh menyu", "callback_data": "back_main"}],
+    ])
+
+
+async def show_channel_section_choice(
+    user_id: int,
+    ui_chat_id: int,
+    ui_message_id: Optional[int],
+    channel: Dict[str, Any],
+) -> None:
+    channel_id = int(channel["id"])
+    channel_title = channel.get("title") or channel.get("username") or "Kanal"
+    await set_session(
+        user_id,
+        mode="channel_select",
+        target=None,
+        channel_id=channel_id,
+        channel_title=channel_title,
+        ui_chat_id=ui_chat_id,
+        ui_message_id=ui_message_id,
+    )
+    await show_or_replace_panel(
+        user_id,
+        ui_chat_id,
+        f"✅ KANAL QABUL QILINDI!\n\n📢 {channel_title}\n\n📌 Qaysi bo‘limga qo‘shamiz?",
+        channel_section_keyboard(),
+        preferred_message_id=ui_message_id,
+    )
+
+
+async def resolve_channel_from_link(
+    parsed: Dict[str, str],
+    session: Dict[str, Any],
+) -> Optional[Dict[str, Any]]:
+    """Linkdan kanalni topadi va bot adminligini tekshiradi.
+
+    Public kanal: @username orqali to'g'ridan-to'g'ri getChat.
+    Private kanal: Bot API invite hashni chat_id ga resolve qilmaydi. Shuning uchun
+    my_chat_member orqali oldindan eslab qolingan oxirgi admin-kanal ishlatiladi.
+    Exact invite hash mos kelsa ustuvor; boshqa admin yaratgan link bo'lsa ham,
+    botning o'zi shu kanalda adminligi tasdiqlansa oxirgi kanal qabul qilinadi.
+    """
+    if parsed.get("kind") == "public":
+        username = parsed["username"]
+        try:
+            chat = await tg("getChat", {"chat_id": f"@{username}"})
+        except Exception:
+            return None
+        if chat.get("type") != "channel":
+            return None
+        if not await bot_is_channel_admin(int(chat["id"])):
+            return None
+        return chat
+
+    if parsed.get("kind") != "private":
+        return None
+
+    pasted_hash = parsed.get("hash")
+    candidate_id = session.get("channel_id")
+    candidate_chat: Optional[Dict[str, Any]] = None
+
+    # 1) Avval adminning oxirgi my_chat_member orqali eslab qolingan kanalini tekshiramiz.
+    if candidate_id:
+        try:
+            chat = await tg("getChat", {"chat_id": int(candidate_id)})
+            if chat.get("type") == "channel" and await bot_is_channel_admin(int(chat["id"])):
+                candidate_chat = chat
+                bot_hash = private_invite_hash(chat.get("invite_link"))
+                if bot_hash and pasted_hash and bot_hash == pasted_hash:
+                    return chat
+        except Exception:
+            candidate_chat = None
+
+    # 2) Avval qo'shilgan kanallar orasida invite_link aynan mos keladimi tekshiramiz.
+    #    Bu kanal qayta bo'limga o'tkazilayotgan holatni ham qo'llaydi.
+    try:
+        existing = await get_targets()
+    except Exception:
+        existing = []
+
+    seen: set[int] = set()
+    for item in existing:
+        if item.get("chat_type") != "channel":
+            continue
+        try:
+            cid = int(item["chat_id"])
+        except Exception:
+            continue
+        if cid in seen or (candidate_id and cid == int(candidate_id)):
+            continue
+        seen.add(cid)
+        try:
+            chat = await tg("getChat", {"chat_id": cid})
+            if chat.get("type") != "channel" or not await bot_is_channel_admin(cid):
+                continue
+            bot_hash = private_invite_hash(chat.get("invite_link"))
+            if bot_hash and pasted_hash and bot_hash == pasted_hash:
+                return chat
+        except Exception:
+            continue
+
+    # Telegram Bot API boshqa administrator yaratgan private invite linkni resolve qila olmaydi.
+    # Foydalanuvchi aynan oldin botni admin qilgan bo'lsa, eslab qolingan kanal — kerakli kanal.
+    return candidate_chat
+
+
+async def handle_channel_link_message(
+    update: Dict[str, Any],
+    session: Dict[str, Any],
+) -> None:
+    message = update["message"]
+    user_id = int(message["from"]["id"])
+    chat_id = int(message["chat"]["id"])
+    text = message.get("text") or ""
+    ui_message_id = int(session.get("ui_message_id") or 0) or None
+
+    parsed = parse_channel_link(text)
+    if not parsed:
+        await show_or_replace_panel(
+            user_id,
+            chat_id,
+            "❌ Kanal silkasi noto‘g‘ri.\n\n"
+            "Public: https://t.me/kanal_nomi\n"
+            "Yopiq: https://t.me/+XXXXXXXX\n\n"
+            "🔁 To‘g‘ri silkani yuboring.",
+            cancel_keyboard(),
+            preferred_message_id=ui_message_id,
+        )
+        return
+
+    channel = await resolve_channel_from_link(parsed, session)
+    if not channel:
+        if parsed.get("kind") == "private":
+            error_text = (
+                "❌ Yopiq kanal topilmadi.\n\n"
+                "1️⃣ Shu botni o‘sha kanalga Administrator qiling.\n"
+                "2️⃣ Agar bot avvaldan admin bo‘lsa, uni bir marta adminlikdan olib, qayta Administrator qiling.\n"
+                "3️⃣ So‘ng shu private silkani yana yuboring.\n\n"
+                "⚠️ Bot kanalda admin bo‘lmasa private kanalni aniqlab bo‘lmaydi."
+            )
+        else:
+            error_text = (
+                "❌ Kanal topilmadi yoki bot bu kanalda Administrator emas.\n\n"
+                "Avval botni kanalga Administrator qiling, keyin silkani yana yuboring."
+            )
+        await show_or_replace_panel(
+            user_id,
+            chat_id,
+            error_text,
+            cancel_keyboard(),
+            preferred_message_id=ui_message_id,
+        )
+        return
+
+    await show_channel_section_choice(user_id, chat_id, ui_message_id, channel)
+
+
 async def handle_start(update: Dict[str, Any]) -> None:
     message = update["message"]
     chat = message["chat"]
@@ -414,21 +655,20 @@ async def save_group(update: Dict[str, Any], target: str) -> None:
 
 async def channel_add(update: Dict[str, Any]) -> None:
     query = update["callback_query"]
-    user_id = query["from"]["id"]
-    chat_id = query["message"]["chat"]["id"]
-    message_id = query["message"]["message_id"]
+    user_id = int(query["from"]["id"])
+    chat_id = int(query["message"]["chat"]["id"])
+    message_id = int(query["message"]["message_id"])
 
     if not is_main_admin(update):
         await answer_callback(query["id"], "🔒 Sizda ruxsat yo‘q!", True)
         return
 
     await answer_callback(query["id"])
+    # Oxirgi my_chat_member kanalini O'CHIRMAYMIZ — private linkni shundan taniymiz.
     await set_session(
         user_id,
-        mode="channel_wait_admin",
+        mode="channel_wait_link",
         target=None,
-        channel_id=None,
-        channel_title=None,
         ui_chat_id=chat_id,
         ui_message_id=message_id,
     )
@@ -438,11 +678,10 @@ async def channel_add(update: Dict[str, Any]) -> None:
         chat_id,
         (
             "📢 KANAL QO‘SHISH\n\n"
-            "1️⃣ Telegram kanal sozlamasini oching.\n"
-            "2️⃣ Shu botni kanalga Administrator qilib qo‘shing.\n"
-            "3️⃣ Bot kanalni avtomatik aniqlaydi.\n\n"
-            "✅ Public ham, yopiq/private kanal ham ishlaydi.\n"
-            "🔗 Kanal linkini yuborish shart emas."
+            "🔗 Kanal silkasini yuboring.\n\n"
+            "✅ Ochiq kanal: https://t.me/kanal_nomi\n"
+            "✅ Yopiq kanal: https://t.me/+XXXXXXXX\n\n"
+            "⚠️ Silka yuborishdan OLDIN bot shu kanalda Administrator bo‘lishi kerak."
         ),
         cancel_keyboard(),
         preferred_message_id=message_id,
@@ -450,54 +689,35 @@ async def channel_add(update: Dict[str, Any]) -> None:
 
 
 async def handle_my_chat_member(update: Dict[str, Any]) -> None:
-    """Bot kanalga admin qilinganda private kanal ID sini avtomatik ushlaydi."""
+    """Bot kanalga admin qilinganda kanal ID sini eslab qoladi, lekin avtomatik qo'shmaydi."""
     event = update.get("my_chat_member") or {}
     chat = event.get("chat") or {}
-    actor = event.get("from") or {}
     new_member = event.get("new_chat_member") or {}
 
     if chat.get("type") != "channel":
         return
     if new_member.get("status") not in ("administrator", "creator"):
         return
-    actor_id = actor.get("id")
-    if actor_id not in ADMIN_IDS:
-        return
-
-    # Kanal qo‘shishni qaysi admin boshlagan bo‘lsa, aynan uning sessiyasi davom etadi.
-    user_id = int(actor_id)
-    session = await get_session(user_id)
-    if session.get("mode") != "channel_wait_admin":
-        return
 
     channel_id = int(chat["id"])
     channel_title = chat.get("title") or "Yopiq kanal"
-    ui_chat_id = int(session.get("ui_chat_id") or user_id)
-    ui_message_id = int(session.get("ui_message_id") or 0) or None
+    try:
+        full_chat = await tg("getChat", {"chat_id": channel_id})
+        channel_title = full_chat.get("title") or channel_title
+    except Exception:
+        pass
 
-    await set_session(
-        user_id,
-        mode="channel_select",
-        target=None,
-        channel_id=channel_id,
-        channel_title=channel_title,
-        ui_chat_id=ui_chat_id,
-        ui_message_id=ui_message_id,
-    )
-
-    keyboard = inline_keyboard([
-        [{"text": "👨‍💼 Admin", "callback_data": "channel_admin"}],
-        [{"text": "🧑‍💼 Manager", "callback_data": "channel_manager"}],
-        [{"text": "👔 Rahbar", "callback_data": "channel_rahbar"}],
-        [{"text": "⬅️ Bosh menyu", "callback_data": "back_main"}],
-    ])
-    await show_or_replace_panel(
-        user_id,
-        ui_chat_id,
-        f"✅ KANAL ANIQLANDI!\n\n📢 {channel_title}\n\n📌 Qaysi bo‘limga qo‘shamiz?",
-        keyboard,
-        preferred_message_id=ui_message_id,
-    )
+    # Qaysi configured admin keyin link yuborishini oldindan bilmaymiz.
+    # Shuning uchun oxirgi admin qilingan kanalni barcha bot-adminlar sessiyasida eslab qolamiz.
+    for admin_id in ADMIN_IDS:
+        try:
+            await set_session(
+                int(admin_id),
+                channel_id=channel_id,
+                channel_title=channel_title,
+            )
+        except Exception as exc:
+            print(f"CHANNEL CACHE ERROR {admin_id}: {exc}")
 
 
 async def save_channel(update: Dict[str, Any], target: str) -> None:
@@ -592,8 +812,6 @@ async def select_send_target(update: Dict[str, Any], target: str) -> None:
         user_id,
         mode="send",
         target=target,
-        channel_id=None,
-        channel_title=None,
         ui_chat_id=chat_id,
         ui_message_id=message_id,
     )
@@ -703,6 +921,10 @@ async def handle_private_message(update: Dict[str, Any]) -> None:
     session = await get_session(user_id)
     mode = session.get("mode")
 
+    if mode == "channel_wait_link":
+        await handle_channel_link_message(update, session)
+        return
+
     if mode == "send" and session.get("target"):
         await distribute_message(update, session["target"], session)
         return
@@ -749,7 +971,7 @@ async def root():
     return {
         "ok": True,
         "service": "feruza-abduqosimova-bot",
-        "version": "2.5.0",
+        "version": "2.6.0",
         "mode": "telegram-webhook",
         "database": "supabase",
     }
