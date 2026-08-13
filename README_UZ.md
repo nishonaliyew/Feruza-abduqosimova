@@ -5,8 +5,8 @@ Bu versiya Vercel uchun qayta tuzilgan:
 - `run_polling()` o‘rniga **Telegram Webhook** ishlaydi.
 - `channels.json` o‘rniga **Supabase** doimiy bazasi ishlaydi.
 - Guruh faqat **guruh ichida `/qoshish`** orqali qo‘shiladi.
-- Kanal faqat **bot shaxsiy chatida `📢 Kanal qo‘shish` → kanal linkini yuborish** orqali qo‘shiladi.
-- Bot chatni clean saqlaydi: `/start`, kanal linki va tarqatish uchun yuborilgan admin xabari ishlatilgach o‘chiriladi.
+- Kanal **bot shaxsiy chatida `📢 Kanal qo‘shish` → botni kanalga Administrator qilish** orqali avtomatik aniqlanadi. Public ham, yopiq/private kanal ham ishlaydi.
+- Bot chatni clean saqlaydi: `/start` va tarqatish uchun yuborilgan admin xabari ishlatilgach o‘chiriladi.
 - Shaxsiy chatda ko‘p xabar tashlamaydi: asosiy boshqaruv oynasi imkon qadar **bitta panel xabarini edit qilib** ishlaydi.
 - Guruhda `/qoshish` komandasi va tanlash oynasi ish tugagach o‘chadi.
 
@@ -54,6 +54,8 @@ WEBHOOK_SECRET=boshqa_uzun_secret
 
 ## 4. Webhookni ulash
 
+**Muhim:** 2.2.0 versiyada yopiq kanalni avtomatik aniqlash uchun webhook `my_chat_member` update turini ham qabul qiladi. Yangi kod deploy bo‘lgach `/setup` URLini **yana bir marta** oching.
+
 Deploy tugagach bir marta browserda:
 
 ```text
@@ -81,13 +83,14 @@ https://PROJECT.vercel.app/health
 
 ### Kanal qo‘shish
 
-1. Botni kanalga Administrator qiling.
-2. Botning shaxsiy chatida `/start` bosing.
-3. `📢 Kanal qo‘shish` ni bosing.
-4. `https://t.me/kanal_nomi` yoki `@kanal_nomi` yuboring.
+1. Botning shaxsiy chatida `/start` bosing.
+2. `📢 Kanal qo‘shish` ni bosing.
+3. Telegram kanal sozlamasiga o‘ting va shu botni kanalga **Administrator** qilib qo‘shing.
+4. Bot kanalni avtomatik aniqlaydi va private chatdagi panelda kanal nomini ko‘rsatadi.
 5. `Admin / Manager / Rahbar` bo‘limini tanlang.
 
-> Public `t.me/username` kanal linklari to‘g‘ridan-to‘g‘ri ishlaydi. Private invite link (`t.me/+...`) Telegram Bot API orqali username kabi resolve qilinmaydi.
+> Kanal linkini yuborish shart emas. Shu sabab public kanal ham, `t.me/+...` yopiq/private kanal ham qo‘shiladi.
+> Agar bot kanalga oldindan admin qilib qo‘yilgan bo‘lsa, `📢 Kanal qo‘shish`ni bosgandan keyin botni kanaldan olib qayta Administrator qilib qo‘shing — yangi `my_chat_member` hodisasi kelishi kerak.
 
 ### Xabar tarqatish
 

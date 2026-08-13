@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 
-app = FastAPI(title="Feruza Abduqosimova Telegram Bot", version="2.1.0")
+app = FastAPI(title="Feruza Abduqosimova Telegram Bot", version="2.2.0")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_ID_RAW = os.getenv("ADMIN_ID", "").strip()
@@ -83,10 +83,7 @@ def main_menu() -> Dict[str, Any]:
             {"text": "👥 Hamma", "callback_data": "send_hamma"},
         ],
         [{"text": "📢 Kanal qo‘shish", "callback_data": "channel_add"}],
-        [
-            {"text": "📋 Ro‘yxat", "callback_data": "show_list"},
-            {"text": "📊 Statistika", "callback_data": "show_stats"},
-        ],
+        [{"text": "📊 Statistika", "callback_data": "show_stats"}],
     ])
 
 
@@ -422,7 +419,7 @@ async def channel_add(update: Dict[str, Any]) -> None:
     await answer_callback(query["id"])
     await set_session(
         user_id,
-        mode="channel_link",
+        mode="channel_wait_admin",
         target=None,
         channel_id=None,
         channel_title=None,
@@ -435,112 +432,48 @@ async def channel_add(update: Dict[str, Any]) -> None:
         chat_id,
         (
             "📢 KANAL QO‘SHISH\n\n"
-            "1️⃣ Botni kanalga Administrator qilib qo‘shing.\n"
-            "2️⃣ Shu yerga kanal linkini yuboring.\n\n"
-            "Masalan:\nhttps://t.me/kanal_nomi\n\n"
-            "yoki\n@kanal_nomi"
+            "1️⃣ Telegram kanal sozlamasini oching.\n"
+            "2️⃣ Shu botni kanalga Administrator qilib qo‘shing.\n"
+            "3️⃣ Bot kanalni avtomatik aniqlaydi.\n\n"
+            "✅ Public ham, yopiq/private kanal ham ishlaydi.\n"
+            "🔗 Kanal linkini yuborish shart emas."
         ),
         cancel_keyboard(),
         preferred_message_id=message_id,
     )
 
 
-def parse_channel_username(text: str) -> Optional[str]:
-    text = text.strip()
-    if text.startswith("@") and len(text) > 1:
-        return text
-    if "t.me/" in text:
-        part = text.split("t.me/", 1)[1].split("?", 1)[0].split("/", 1)[0].strip()
-        if part and not part.startswith("+") and part.lower() != "joinchat":
-            return "@" + part.lstrip("@")
-    return None
+async def handle_my_chat_member(update: Dict[str, Any]) -> None:
+    """Bot kanalga admin qilinganda private kanal ID sini avtomatik ushlaydi."""
+    event = update.get("my_chat_member") or {}
+    chat = event.get("chat") or {}
+    actor = event.get("from") or {}
+    new_member = event.get("new_chat_member") or {}
 
+    if chat.get("type") != "channel":
+        return
+    if new_member.get("status") not in ("administrator", "creator"):
+        return
+    if not ADMIN_ID or actor.get("id") != ADMIN_ID:
+        return
 
-def channel_link_screen(error: Optional[str] = None) -> str:
-    prefix = f"{error}\n\n" if error else ""
-    return (
-        prefix
-        + "📢 KANAL QO‘SHISH\n\n"
-        + "1️⃣ Botni kanalga Administrator qilib qo‘shing.\n"
-        + "2️⃣ Shu yerga kanal linkini yuboring.\n\n"
-        + "Masalan:\nhttps://t.me/kanal_nomi\n\n"
-        + "yoki\n@kanal_nomi"
-    )
+    user_id = ADMIN_ID
+    session = await get_session(user_id)
+    if session.get("mode") != "channel_wait_admin":
+        return
 
-
-async def receive_channel_link(update: Dict[str, Any], session: Dict[str, Any]) -> None:
-    message = update["message"]
-    user_id = message["from"]["id"]
-    chat_id = message["chat"]["id"]
-    input_message_id = message["message_id"]
-    text = (message.get("text") or "").strip()
+    channel_id = int(chat["id"])
+    channel_title = chat.get("title") or "Yopiq kanal"
+    ui_chat_id = int(session.get("ui_chat_id") or user_id)
     ui_message_id = int(session.get("ui_message_id") or 0) or None
 
-    # Admin tashlagan kanal linki chatda qolib ketmasin.
-    await safe_delete(chat_id, input_message_id)
-
-    username = parse_channel_username(text)
-    if not username:
-        await show_or_replace_panel(
-            user_id,
-            chat_id,
-            channel_link_screen("❌ Kanal linki noto‘g‘ri."),
-            cancel_keyboard(),
-            preferred_message_id=ui_message_id,
-        )
-        return
-
-    try:
-        channel = await tg("getChat", {"chat_id": username})
-    except Exception:
-        await show_or_replace_panel(
-            user_id,
-            chat_id,
-            channel_link_screen("❌ Kanal topilmadi yoki bot uni ko‘ra olmayapti."),
-            cancel_keyboard(),
-            preferred_message_id=ui_message_id,
-        )
-        return
-
-    if channel.get("type") != "channel":
-        await show_or_replace_panel(
-            user_id,
-            chat_id,
-            channel_link_screen("⚠️ Yuborilgan link Telegram kanaliga tegishli emas."),
-            cancel_keyboard(),
-            preferred_message_id=ui_message_id,
-        )
-        return
-
-    try:
-        bot_user = await tg("getMe")
-        member = await tg("getChatMember", {"chat_id": channel["id"], "user_id": bot_user["id"]})
-        if member.get("status") not in ("administrator", "creator"):
-            await show_or_replace_panel(
-                user_id,
-                chat_id,
-                channel_link_screen("🔒 Bot bu kanalda Administrator emas."),
-                cancel_keyboard(),
-                preferred_message_id=ui_message_id,
-            )
-            return
-    except Exception:
-        await show_or_replace_panel(
-            user_id,
-            chat_id,
-            channel_link_screen("⚠️ Botning kanal huquqini tekshirib bo‘lmadi."),
-            cancel_keyboard(),
-            preferred_message_id=ui_message_id,
-        )
-        return
-
-    title = channel.get("title") or username
     await set_session(
         user_id,
         mode="channel_select",
-        channel_id=int(channel["id"]),
-        channel_title=title,
-        ui_chat_id=chat_id,
+        target=None,
+        channel_id=channel_id,
+        channel_title=channel_title,
+        ui_chat_id=ui_chat_id,
         ui_message_id=ui_message_id,
     )
 
@@ -552,8 +485,8 @@ async def receive_channel_link(update: Dict[str, Any], session: Dict[str, Any]) 
     ])
     await show_or_replace_panel(
         user_id,
-        chat_id,
-        f"✅ KANAL TOPILDI!\n\n📢 {title}\n\n📌 Qaysi bo‘limga qo‘shamiz?",
+        ui_chat_id,
+        f"✅ KANAL ANIQLANDI!\n\n📢 {channel_title}\n\n📌 Qaysi bo‘limga qo‘shamiz?",
         keyboard,
         preferred_message_id=ui_message_id,
     )
@@ -594,41 +527,6 @@ async def save_channel(update: Dict[str, Any], target: str) -> None:
         main_menu(),
         preferred_message_id=message_id,
     )
-
-
-async def show_list(update: Dict[str, Any]) -> None:
-    query = update["callback_query"]
-    user_id = query["from"]["id"]
-    chat_id = query["message"]["chat"]["id"]
-    message_id = query["message"]["message_id"]
-
-    if not is_main_admin(update):
-        await answer_callback(query["id"], "🔒 Sizda ruxsat yo‘q!", True)
-        return
-
-    await answer_callback(query["id"])
-    items = await get_targets()
-    grouped = {"admin": [], "manager": [], "rahbar": []}
-    for item in items:
-        if item.get("section") in grouped:
-            grouped[item["section"]].append(item)
-
-    lines = ["📋 RO‘YXAT", ""]
-    total = 0
-    for section in ("admin", "manager", "rahbar"):
-        lines.append(SECTION_NAMES[section].upper())
-        if not grouped[section]:
-            lines.extend(["  └─ Bo‘sh", ""])
-            continue
-        for item in grouped[section]:
-            icon = "📢" if item.get("chat_type") == "channel" else "👥"
-            lines.append(f"  └─ {icon} {item.get('title', 'Noma’lum')}")
-            total += 1
-        lines.append("")
-    lines.append(f"📌 Jami: {total} ta")
-
-    await reset_session(user_id, ui_chat_id=chat_id, ui_message_id=message_id)
-    await show_or_replace_panel(user_id, chat_id, "\n".join(lines), main_menu(), preferred_message_id=message_id)
 
 
 async def show_stats(update: Dict[str, Any]) -> None:
@@ -783,8 +681,6 @@ async def handle_callback(update: Dict[str, Any]) -> None:
         await save_group(update, data.split("_", 1)[1])
     elif data.startswith("send_") and data.split("_", 1)[1] in ("admin", "manager", "rahbar", "hamma"):
         await select_send_target(update, data.split("_", 1)[1])
-    elif data == "show_list":
-        await show_list(update)
     elif data == "show_stats":
         await show_stats(update)
     else:
@@ -800,10 +696,6 @@ async def handle_private_message(update: Dict[str, Any]) -> None:
     chat_id = message["chat"]["id"]
     session = await get_session(user_id)
     mode = session.get("mode")
-
-    if mode == "channel_link":
-        await receive_channel_link(update, session)
-        return
 
     if mode == "send" and session.get("target"):
         await distribute_message(update, session["target"], session)
@@ -824,6 +716,10 @@ async def handle_private_message(update: Dict[str, Any]) -> None:
 
 
 async def process_update(update: Dict[str, Any]) -> None:
+    if update.get("my_chat_member"):
+        await handle_my_chat_member(update)
+        return
+
     if update.get("callback_query"):
         await handle_callback(update)
         return
@@ -848,7 +744,7 @@ async def root():
     return {
         "ok": True,
         "service": "feruza-abduqosimova-bot",
-        "version": "2.1.0",
+        "version": "2.2.0",
         "mode": "telegram-webhook",
         "database": "supabase",
     }
@@ -885,7 +781,7 @@ async def setup(request: Request, secret: str):
     result = await tg("setWebhook", {
         "url": webhook_url,
         "secret_token": WEBHOOK_SECRET,
-        "allowed_updates": ["message", "callback_query"],
+        "allowed_updates": ["message", "callback_query", "my_chat_member"],
         "drop_pending_updates": True,
     })
     info = await tg("getWebhookInfo")
