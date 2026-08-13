@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from fastapi import FastAPI, Header, HTTPException, Request
 
-app = FastAPI(title="Feruza Abduqosimova Telegram Bot", version="2.2.0")
+app = FastAPI(title="Feruza Abduqosimova Telegram Bot", version="2.3.0")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_ID_RAW = os.getenv("ADMIN_ID", "").strip()
@@ -349,15 +349,14 @@ async def handle_start(update: Dict[str, Any]) -> None:
     user_id = message["from"]["id"]
 
     if chat.get("type") != "private":
-        # Guruhda /start kerak emas. Guruh qo‘shish uchun faqat /qoshish ishlatiladi.
-        await safe_delete(chat["id"], message["message_id"])
+        # Guruhda /start kerak emas. Foydalanuvchi yozgan komandani o‘chirmaymiz.
         return
 
     if not is_main_admin(update):
         await send_message(chat["id"], "🔒 Bu bot faqat administrator tomonidan boshqariladi.")
         return
 
-    await safe_delete(chat["id"], message["message_id"])
+    # /start komandasi foydalanuvchi xabari — o‘chirilmaydi.
     panel_id = await show_or_replace_panel(user_id, chat["id"], PANEL_TEXT, main_menu())
     await reset_session(user_id, ui_chat_id=chat["id"], ui_message_id=panel_id)
 
@@ -367,13 +366,9 @@ async def handle_qoshish(update: Dict[str, Any]) -> None:
     chat = message["chat"]
 
     if chat.get("type") not in ("group", "supergroup"):
-        # Shaxsiy chatda ortiqcha xabar qoldirmaymiz.
-        if chat.get("type") == "private":
-            await safe_delete(chat["id"], message["message_id"])
         return
 
     if not await is_group_admin(update):
-        await safe_delete(chat["id"], message["message_id"])
         return
 
     keyboard = inline_keyboard([
@@ -381,11 +376,8 @@ async def handle_qoshish(update: Dict[str, Any]) -> None:
         [{"text": "🧑‍💼 Manager", "callback_data": "group_manager"}],
         [{"text": "👔 Rahbar", "callback_data": "group_rahbar"}],
     ])
-    sent = await send_message(chat["id"], "📌 Ushbu guruhni qaysi bo‘limga qo‘shamiz?", keyboard)
-    await safe_delete(chat["id"], message["message_id"])
-
-    # Agar bot guruhda o‘chirish huquqiga ega bo‘lmasa, bu qator shunchaki jim o‘tadi.
-    _ = sent
+    await send_message(chat["id"], "📌 Ushbu guruhni qaysi bo‘limga qo‘shamiz?", keyboard)
+    # /qoshish — foydalanuvchi xabari. Uni bot o‘chirmaydi.
 
 
 async def save_group(update: Dict[str, Any], target: str) -> None:
@@ -609,7 +601,7 @@ async def distribute_message(update: Dict[str, Any], target: str, session: Dict[
 
     targets = await get_targets(target)
     if not targets:
-        await safe_delete(chat_id, input_message_id)
+        # Admin yuborgan original xabar saqlanadi.
         panel_id = await show_or_replace_panel(
             user_id,
             chat_id,
@@ -639,9 +631,7 @@ async def distribute_message(update: Dict[str, Any], target: str, session: Dict[
     success = sum(1 for ok in results if ok)
     failed = len(results) - success
 
-    # Tarqatish tugagach admin yuborgan original xabarni o‘chiramiz.
-    await safe_delete(chat_id, input_message_id)
-
+    # Tarqatish tugagach ham admin yuborgan original xabarni o‘chirmaymiz.
     panel_id = await show_or_replace_panel(
         user_id,
         chat_id,
@@ -701,9 +691,8 @@ async def handle_private_message(update: Dict[str, Any]) -> None:
         await distribute_message(update, session["target"], session)
         return
 
-    # Rejim tanlanmagan bo‘lsa foydalanuvchi yuborgan ortiqcha xabarni o‘chirib,
-    # mavjud panelni qayta ko‘rsatamiz.
-    await safe_delete(chat_id, message["message_id"])
+    # Rejim tanlanmagan bo‘lsa ham foydalanuvchi xabarini o‘chirmaymiz.
+    # Faqat mavjud bot panelini yangilaymiz.
     preferred = int(session.get("ui_message_id") or 0) or None
     panel_id = await show_or_replace_panel(
         user_id,
@@ -744,7 +733,7 @@ async def root():
     return {
         "ok": True,
         "service": "feruza-abduqosimova-bot",
-        "version": "2.2.0",
+        "version": "2.3.0",
         "mode": "telegram-webhook",
         "database": "supabase",
     }

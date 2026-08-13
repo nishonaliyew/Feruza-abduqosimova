@@ -104,3 +104,12 @@ https://PROJECT.vercel.app/health
 - `.env.example` — ENV namuna
 - `.gitignore` — secret/fayllarni Git’dan himoyalaydi
 - `.python-version` — Python 3.12
+
+## v2.3 — foydalanuvchi xabarlari saqlanadi
+
+- `/start` xabari o‘chirilmaydi.
+- Guruhdagi `/qoshish` xabari o‘chirilmaydi.
+- Tarqatish uchun admin yuborgan original xabar o‘chirilmaydi.
+- Private chatda admin yozgan oddiy xabarlar o‘chirilmaydi.
+- Faqat botning o‘zi yuborgan vaqtinchalik inline tanlash xabari kerak bo‘lsa o‘chirilishi mumkin.
+
